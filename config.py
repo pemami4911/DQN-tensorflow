@@ -35,8 +35,8 @@ class AgentConfig(object):
 class EnvironmentConfig(object):
   env_name = 'ppaquette/DoomDefendCenter-v0'
 
-  screen_width  = 120
-  screen_height = 160
+  screen_width  = 160
+  screen_height = 120
   max_reward = 1.
   min_reward = -1.
 

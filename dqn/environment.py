@@ -1,9 +1,11 @@
-from skimage import transform as tf
+#from skimage import transform as tf
 from skimage import color as cl
 import gym
 import gym_pull
 import random
 import numpy as np
+from wrappers.observation_space import *
+from wrappers.action_space import *
 
 class Environment(object):
   def __init__(self, config):
@@ -40,12 +42,13 @@ class Environment(object):
     action = self.env.action_space.sample()
     self._step(action)
 
-  @ property
+  @property
   def screen(self):
     #return cv2.resize(cv2.cvtColor(self._screen, cv2.COLOR_RGB2GRAY)/255., self.dims)
     #return cv2.resize(cv2.cvtColor(self._screen, cv2.COLOR_BGR2YCR_CB)/255., self.dims)[:,:,0]
-    return tf.resize(cl.rgb2gray(self._screen)/255., self.dims)
- 
+    #return tf.resize(cl.rgb2gray(self._screen)/255., self.dims)
+    return cl.rgb2gray(self._screen)/255.   
+
   @property
   def action_size(self):
     return self.env.action_space.n
@@ -65,6 +68,44 @@ class Environment(object):
   def after_act(self, action):
     self.render()
 
+class GymDoomEnvironment(Environment):
+  def __init__(self, config): 
+    super(GymDoomEnvironment, self).__init__(config)
+  
+    # Convert MultiDiscrete action space to Discrete
+    DiscreteWrapper = ToDiscrete('minimal')
+    # Set resolution
+    res = str(config.screen_width) + 'x' + str(config.screen_height)
+    ResolutionWrapper = SetResolution(res)
+   
+    self.env = ResolutionWrapper(DiscreteWrapper(self.env)) 
+
+  def new_game(self, from_random_game=False):
+    self._screen = self.env.reset()
+    self._step(0)
+    self.render()
+    return self.screen, 0, 0, self.terminal	
+  
+  @property
+  def lives(self):
+    pass   
+
+  def act(self, action, is_training=True): 
+    cumulated_reward = 0
+    
+    for _ in xrange(self.action_repeat):
+      self._step(action)
+      cumulated_reward = cumulated_reward + self.reward
+      
+      if self.terminal:
+        break
+   
+    self.reward = cumulated_reward
+
+    self.after_act(action)
+    return self.state
+
+      
 class GymEnvironment(Environment):
   def __init__(self, config):
     super(GymEnvironment, self).__init__(config)

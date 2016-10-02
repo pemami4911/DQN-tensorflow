@@ -2,7 +2,7 @@ import random
 import tensorflow as tf
 
 from dqn.agent import Agent
-from dqn.environment import GymEnvironment, SimpleGymEnvironment
+from dqn.environment import GymEnvironment, GymDoomEnvironment, SimpleGymEnvironment
 from config import get_config
 
 flags = tf.app.flags
@@ -14,6 +14,7 @@ flags.DEFINE_boolean('double_q', False, 'Whether to use double q-learning')
 
 # Environment
 #flags.DEFINE_string('env_name', 'Breakout-v0', 'The name of gym environment to use')
+flags.DEFINE_string('env_type', 'Doom', 'The type of gym environment to use { Doom | ALE }')
 flags.DEFINE_integer('action_repeat', 4, 'The number of action to be repeated')
 
 # Etc
@@ -49,6 +50,8 @@ def main(_):
 
     if config.env_type == 'simple':
       env = SimpleGymEnvironment(config)
+    elif config.env_type == 'Doom':
+      env = GymDoomEnvironment(config)
     else:
       env = GymEnvironment(config)
 
