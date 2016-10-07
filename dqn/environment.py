@@ -2,6 +2,7 @@
 from skimage import color as cl
 import gym
 import gym_pull
+from gym.envs.classic_control import rendering
 import random
 import numpy as np
 from wrappers.observation_space import *
