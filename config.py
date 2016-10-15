@@ -19,7 +19,9 @@ class AgentConfig(object):
   ep_start = 1.
   ep_end_t = memory_size
 
-  history_length = 4
+  sequence_length = 10
+  min_sequence_length = 6
+  history_length = 1 # For DRQN, this is just the number of channels, 1 for grayscale
   train_frequency = 4
   learn_start = 5. * scale
 
@@ -47,7 +49,7 @@ class DQNConfig(AgentConfig, EnvironmentConfig):
 class M1(DQNConfig):
   backend = 'tf'
   env_type = 'detail'
-  action_repeat = 1
+  action_repeat = 4 # For Doom, use 4
 
 def get_config(FLAGS):
   if FLAGS.model == 'm1':

@@ -29,6 +29,33 @@ def conv2d(x,
 
   return out, w, b
 
+def conv2dParams(n_channels,
+           output_dim,
+           kernel_size,
+           initializer=tf.contrib.layers.xavier_initializer(),
+           name='conv2d'):
+  with tf.variable_scope(name):
+    kernel_shape = [kernel_size[0], kernel_size[1], n_channels, output_dim]
+    w = tf.get_variable('w', kernel_shape, tf.float32, initializer=initializer)
+    b = tf.get_variable('biases', [output_dim], initializer=tf.constant_initializer(0.0))
+
+  return w, b 
+
+def conv2dOut(input_, w, b, stride, data_format='NHWC', activation_fn=tf.nn.relu, padding='VALID', name='convolution'):
+  with tf.variable_scope(name):
+    if data_format == 'NCHW':
+        stride = [1, 1, stride[0], stride[1]]
+    elif data_format == 'NHWC':
+      stride = [1, stride[0], stride[1], 1]
+
+    conv = tf.nn.conv2d(input_, w, stride, padding, data_format=data_format)
+    out = tf.nn.bias_add(conv, b, data_format)
+
+    if activation_fn != None:
+      out = activation_fn(out)
+
+    return out
+
 def linear(input_, output_size, stddev=0.02, bias_start=0.0, activation_fn=None, name='linear'):
   shape = input_.get_shape().as_list()
 
@@ -44,3 +71,26 @@ def linear(input_, output_size, stddev=0.02, bias_start=0.0, activation_fn=None,
       return activation_fn(out), w, b
     else:
       return out, w, b
+
+def linearParams(input_, output_size, stddev=0.02, bias_start=0.0, activation_fn=None, name='linear'):
+  if isinstance(input_, list):
+    shape = input_[0].get_shape().as_list()
+  else:
+    shape = input_.get_shape().as_list()
+
+  with tf.variable_scope(name):
+    w = tf.get_variable('Matrix', [shape[1], output_size], tf.float32,
+        tf.random_normal_initializer(stddev=stddev))
+    b = tf.get_variable('bias', [output_size],
+        initializer=tf.constant_initializer(bias_start))
+
+    return w, b
+
+def affine(input_, w, b, activation_fn=None, name='affine'):
+  with tf.variable_scope(name):
+    out = tf.nn.bias_add(tf.matmul(input_, w), b)
+    
+    if activation_fn != None:
+      return activation_fn(out)
+    else:
+      return out

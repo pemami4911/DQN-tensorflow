@@ -26,7 +26,7 @@ class Agent(BaseModel):
       self.step_input = tf.placeholder('int32', None, name='step_input')
       self.step_assign_op = self.step_op.assign(self.step_input)
 
-    self.build_dqn()
+    self.build_drqn()
 
   def train(self):
     start_step = self.step_op.eval()
@@ -144,21 +144,15 @@ class Agent(BaseModel):
       s_t, action, reward, s_t_plus_1, terminal = self.memory.sample()
 
     t = time.time()
+
     if self.double_q:
-      # Double Q-learning
-      pred_action = self.q_action.eval({self.s_t: s_t_plus_1})
+      print 'Double Q-learning not supported for DRQN (yet)!'
 
-      q_t_plus_1_with_pred_action = self.target_q_with_idx.eval({
-        self.target_s_t: s_t_plus_1,
-        self.target_q_idx: [[idx, pred_a] for idx, pred_a in enumerate(pred_action)]
-      })
-      target_q_t = (1. - terminal) * self.discount * q_t_plus_1_with_pred_action + reward
-    else:
-      q_t_plus_1 = self.target_q.eval({self.target_s_t: s_t_plus_1})
+    q_t_plus_1 = self.target_q.eval({self.target_s_t: s_t_plus_1})
 
-      terminal = np.array(terminal) + 0.
-      max_q_t_plus_1 = np.max(q_t_plus_1, axis=1)
-      target_q_t = (1. - terminal) * self.discount * max_q_t_plus_1 + reward
+    terminal = np.array(terminal) + 0.
+    max_q_t_plus_1 = np.max(q_t_plus_1, axis=1)
+    target_q_t = (1. - terminal) * self.discount * max_q_t_plus_1 + reward
 
     _, q_t, loss, summary_str = self.sess.run([self.optim, self.q, self.loss, self.q_summary], {
       self.target_q_t: target_q_t,
@@ -184,96 +178,118 @@ class Agent(BaseModel):
     with tf.variable_scope('prediction'):
       if self.cnn_format == 'NHWC':
         self.s_t = tf.placeholder('float32',
-            [None, self.screen_height, self.screen_width, self.history_length], name='s_t')
+            [None, self.sequence_length, self.screen_height, self.screen_width, self.history_length], name='s_t')
       else:
         self.s_t = tf.placeholder('float32',
-            [None, self.history_length, self.screen_height, self.screen_width], name='s_t')
+            [None, self.sequence_length, self.history_length, self.screen_height, self.screen_width], name='s_t')
 
-      self.l1, self.w['l1_w'], self.w['l1_b'] = conv2d(self.s_t,
-          32, [8, 8], [4, 4], initializer, activation_fn, self.cnn_format, name='l1')
-      self.l2, self.w['l2_w'], self.w['l2_b'] = conv2d(self.l1,
-          64, [4, 4], [2, 2], initializer, activation_fn, self.cnn_format, name='l2')
-      self.l3, self.w['l3_w'], self.w['l3_b'] = conv2d(self.l2,
-          64, [3, 3], [1, 1], initializer, activation_fn, self.cnn_format, name='l3')
+      self.w['l1_w'], self.w['l1_b'] = conv2dParams(self.history_length, 32, [8, 8], initializer, name='l1')
+      self.w['l2_w'], self.w['l2_b'] = conv2dParams(32, 64, [4, 4], initializer, name='l2')
+      self.w['l3_w'], self.w['l3_b'] = conv2d(64, 64, [3, 3], initializer, name='l3')
 
-      shape = self.l3.get_shape().as_list()
-      self.l3_flat = tf.reshape(self.l3, [-1, reduce(lambda x, y: x * y, shape[1:])])
+      seq = []
+
+      for i in range(self.sequence_length):
+        self.l1 = conv2dOut(s_t[:, i, :, :, :], self.w['l1_w'], self.w['l1_b'], [4, 4], self.cnn_format)
+        self.l2 = conv2dOut(l1, self.w['l2_w'], self.w['l2_b'], [2, 2], self.cnn_format)
+        self.l3 = conv2dOut(l2, self.w['l3_w'], self.w['l3_b'], [1, 1], self.cnn_format)
+
+        shape = self.l3.get_shape().as_list()
+        self.l3_flat = tf.reshape(self.l3, [-1, reduce(lambda x, y: x * y, shape[1:])])
+        seq.append(self.l3_flat)
 
       if self.dueling:
-        self.value_hid, self.w['l4_val_w'], self.w['l4_val_b'] = \
-            linear(self.l3_flat, 512, activation_fn=activation_fn, name='value_hid')
+        print 'Dueling networks not supported for DRQN (yet)!'
+     
+      # hist_sequence shape: (sequence_length, batch_size, l3_flattened) 
+      hist_sequence = tf.pack(seq)
+      # Reshaping to (sequence_length * batch_size, l3_flattened)
+      hist_sequence = tf.reshape(hist_sequence, [-1, hist_sequence.get_shape().as_list()[2]]) 
+      # Split to get a list of 'sequence_length' tensors of shape (batch_size, l3_flattened)
+      hist_sequence = tf.split(0, self.sequence_length, hist_sequence)
+      # Define lstm cell 
+      lstm_cell = rnn_cell.BasicLSTMCell(512, state_is_tuple=True)
+      # list of length `sequence_length` of Tensors of size (?, 512)
+      self.l4, state = tf.nn.rnn(lstm_cell, hist_sequence, dtype=tf.float32)
+      
+      # throw out sequence elements less than min_sequence_length 
+      self.l4 = self.l4[(self.sequence_length - self.min_sequence_length):]
 
-        self.adv_hid, self.w['l4_adv_w'], self.w['l4_adv_b'] = \
-            linear(self.l3_flat, 512, activation_fn=activation_fn, name='adv_hid')
+      q_values = []
+      q_actions = []
 
-        self.value, self.w['val_w_out'], self.w['val_w_b'] = \
-          linear(self.value_hid, 1, name='value_out')
+      self.w['q_w'], self.w['q_b'] = linear(self.l4, self.env.action_size, name='q')
 
-        self.advantage, self.w['adv_w_out'], self.w['adv_w_b'] = \
-          linear(self.adv_hid, self.env.action_size, name='adv_out')
+      for i in range(self.sequence_length - self.min_sequence_length):
+        q = affine(self.l4[i], self.w['q_w'], self.w['q_b'])
+        q_action = tf.argmax(q, dimension=1)
+        q_values.append(q)
+        q_actions.append(q_action)
 
-        # Average Dueling
-        self.q = self.value + (self.advantage - 
-          tf.reduce_mean(self.advantage, reduction_indices=1, keep_dims=True))
-      else:
-        #self.l4, self.w['l4_w'], self.w['l4_b'] = linear(self.l3_flat, 512, activation_fn=activation_fn, name='l4')
-        #lstm_cell = rnn_cell.BasicLSTMCell(self.lstm_hidden)
-	
-	# Need to do a loop of len(hist_len) and pass forward c, h each iteration. State is zeroed out at time t
-
-	self.q, self.w['q_w'], self.w['q_b'] = linear(self.l4, self.env.action_size, name='q')
-
-      self.q_action = tf.argmax(self.q, dimension=1)
+      self.q_values = tf.pack(q_values)
+      self.q_actions = tf.pack(q_actions)
 
       q_summary = []
-      avg_q = tf.reduce_mean(self.q, 0)
-      for idx in xrange(self.env.action_size):
-        q_summary.append(tf.histogram_summary('q/%s' % idx, avg_q[idx]))
+      avg_q = tf.reduce_mean(self.q_values, 0)
+      for i in range(self.sequence_length - self.min_sequence_length):
+        for j in range(self.env.action_size):
+          q_summary.append(tf.histogram_summary('q/seq[%s]/%s' % i, j, avg_q[i][j]))
       self.q_summary = tf.merge_summary(q_summary, 'q_summary')
 
     # target network
     with tf.variable_scope('target'):
       if self.cnn_format == 'NHWC':
-        self.target_s_t = tf.placeholder('float32', 
-            [None, self.screen_height, self.screen_width, self.history_length], name='target_s_t')
+        self.target_s_t = tf.placeholder('float32',
+            [None, self.sequence_length, self.screen_height, self.screen_width, self.history_length], name='target_s_t')
       else:
-        self.target_s_t = tf.placeholder('float32', 
-            [None, self.history_length, self.screen_height, self.screen_width], name='target_s_t')
+        self.target_s_t = tf.placeholder('float32',
+            [None, self.sequence_length, self.history_length, self.screen_height, self.screen_width], name='target_s_t')
 
-      self.target_l1, self.t_w['l1_w'], self.t_w['l1_b'] = conv2d(self.target_s_t, 
-          32, [8, 8], [4, 4], initializer, activation_fn, self.cnn_format, name='target_l1')
-      self.target_l2, self.t_w['l2_w'], self.t_w['l2_b'] = conv2d(self.target_l1,
-          64, [4, 4], [2, 2], initializer, activation_fn, self.cnn_format, name='target_l2')
-      self.target_l3, self.t_w['l3_w'], self.t_w['l3_b'] = conv2d(self.target_l2,
-          64, [3, 3], [1, 1], initializer, activation_fn, self.cnn_format, name='target_l3')
+      self.t_w['l1_w'], self.t_w['l1_b'] = conv2dParams(self.history_length, 32, [8, 8], initializer, name='target_l1')
+      self.t_w['l2_w'], self.t_w['l2_b'] = conv2dParams(32, 64, [4, 4], initializer, name='target_l2')
+      self.t_w['l3_w'], self.t_w['l3_b'] = conv2d(64, 64, [3, 3], initializer, name='target_l3')
 
-      shape = self.target_l3.get_shape().as_list()
-      self.target_l3_flat = tf.reshape(self.target_l3, [-1, reduce(lambda x, y: x * y, shape[1:])])
+      target_seq = []
+
+      for i in range(self.sequence_length):
+        self.target_l1 = conv2dOut(self.target_s_t[:, i, :, :, :], self.t_w['l1_w'], self.t_w['l1_b'], [4, 4], self.cnn_format)
+        self.target_l2 = conv2dOut(self.target_l1, self.t_w['l2_w'], self.t_w['l2_b'], [2, 2], self.cnn_format)
+        self.target_l3 = conv2dOut(self.target_l2, self.t_w['l3_w'], self.t_w['l3_b'], [1, 1], self.cnn_format)
+
+        shape = self.target_l3.get_shape().as_list()
+        self.target_l3_flat = tf.reshape(self.target_l3, [-1, reduce(lambda x, y: x * y, shape[1:])])
+        target_seq.append(self.target_l3_flat)
 
       if self.dueling:
-        self.t_value_hid, self.t_w['l4_val_w'], self.t_w['l4_val_b'] = \
-            linear(self.target_l3_flat, 512, activation_fn=activation_fn, name='target_value_hid')
+        print 'Dueling networks not supported for DRQN (yet)!'
+     
+      # hist_sequence shape: (sequence_length, batch_size, l3_flattened) 
+      target_hist_sequence = tf.pack(target_seq)
+      # Reshaping to (sequence_length * batch_size, l3_flattened)
+      target_hist_sequence = tf.reshape(target_hist_sequence, [-1, target_hist_sequence.get_shape().as_list()[2]]) 
+      # Split to get a list of 'sequence_length' tensors of shape (batch_size, l3_flattened)
+      target_hist_sequence = tf.split(0, self.sequence_length, target_hist_sequence)
+      # Define lstm cell 
+      target_lstm_cell = rnn_cell.BasicLSTMCell(512, state_is_tuple=True)
+      # list of length `sequence_length` of Tensors of size (?, 512)
+      self.target_l4, target_state = tf.nn.rnn(target_lstm_cell, target_hist_sequence, dtype=tf.float32)
+      
+      # throw out sequence elements less than min_sequence_length 
+      self.target_l4 = self.target_l4[(self.sequence_length - self.min_sequence_length):]
 
-        self.t_adv_hid, self.t_w['l4_adv_w'], self.t_w['l4_adv_b'] = \
-            linear(self.target_l3_flat, 512, activation_fn=activation_fn, name='target_adv_hid')
+      target_q_values = []
+      target_q_actions = []
 
-        self.t_value, self.t_w['val_w_out'], self.t_w['val_w_b'] = \
-          linear(self.t_value_hid, 1, name='target_value_out')
+      self.t_w['q_w'], self.t_w['q_b'] = linear(self.target_l4, self.env.action_size, name='q')
 
-        self.t_advantage, self.t_w['adv_w_out'], self.t_w['adv_w_b'] = \
-          linear(self.t_adv_hid, self.env.action_size, name='target_adv_out')
+      for i in range(self.sequence_length - self.min_sequence_length):
+        target_q = affine(self.target_l4[i], self.t_w['q_w'], self.t_w['q_b'])
+        target_q_action = tf.argmax(target_q, dimension=1)
+        target_q_values.append(target_q)
+        target_q_actions.append(target_q_action)
 
-        # Average Dueling
-        self.target_q = self.t_value + (self.t_advantage - 
-          tf.reduce_mean(self.t_advantage, reduction_indices=1, keep_dims=True))
-      else:
-        self.target_l4, self.t_w['l4_w'], self.t_w['l4_b'] = \
-            linear(self.target_l3_flat, 512, activation_fn=activation_fn, name='target_l4')
-        self.target_q, self.t_w['q_w'], self.t_w['q_b'] = \
-            linear(self.target_l4, self.env.action_size, name='target_q')
-
-      self.target_q_idx = tf.placeholder('int32', [None, None], 'outputs_idx')
-      self.target_q_with_idx = tf.gather_nd(self.target_q, self.target_q_idx)
+      self.target_q_values = tf.pack(target_q_values)
+      self.target_q_actions = tf.pack(target_q_actions)
 
     with tf.variable_scope('pred_to_target'):
       self.t_w_input = {}
