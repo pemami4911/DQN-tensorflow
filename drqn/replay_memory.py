@@ -19,13 +19,14 @@ class ReplayMemory:
     self.terminals = np.empty(self.memory_size, dtype = np.bool)
     self.history_length = config.history_length
     self.dims = (config.screen_height, config.screen_width)
+    self.sequence_length = config.sequence_length
     self.batch_size = config.batch_size
     self.count = 0
     self.current = 0
 
     # pre-allocate prestates and poststates for minibatch
-    self.prestates = np.empty((self.batch_size, self.history_length) + self.dims, dtype = np.float16)
-    self.poststates = np.empty((self.batch_size, self.history_length) + self.dims, dtype = np.float16)
+    self.prestates = np.empty((self.batch_size, self.sequence_length, self.history_length) + self.dims, dtype = np.float16)
+    self.poststates = np.empty((self.batch_size, self.sequence_length, self.history_length) + self.dims, dtype = np.float16)
 
   def add(self, screen, reward, action, terminal):
     assert screen.shape == self.dims
@@ -38,7 +39,7 @@ class ReplayMemory:
     self.current = (self.current + 1) % self.memory_size
 
   def getState(self, index):
-    assert self.count > 0, "replay memory is empy, use at least --random_steps 1"
+    assert self.count > 0, "replay memory is empty, use at least --random_steps 1"
     # normalize index to expected range, allows negative indexes
     index = index % self.count
     # if is not in the beginning of matrix
@@ -82,6 +83,48 @@ class ReplayMemory:
     if self.cnn_format == 'NHWC':
       return np.transpose(self.prestates, (0, 2, 3, 1)), actions, \
         rewards, np.transpose(self.poststates, (0, 2, 3, 1)), terminals
+    else:
+      return self.prestates, actions, rewards, self.poststates, terminals
+
+  def sample_sequence(self):
+    # memory must include poststate, prestate and history
+    assert self.count > self.history_length * self.sequence_length
+    # sample random indexes
+    indexes = []
+    all_indexes = [] 
+    while len(indexes) < self.batch_size:
+      # find random index 
+      while True:
+        # sample one index (ignore states wrapping over) 
+        index = random.randint(self.history_length * sequence_length, self.count - 1)
+        # if wraps over current pointer, then get new one
+        if index >= self.current and index - self.history_length * sequence_length < self.current:
+          continue
+        # if wraps over episode end, then get new one
+        # NB! poststate (last screen) can be terminal state!
+        if self.terminals[(index - self.history_length * sequence_length):index].any():
+          continue
+        # otherwise use this index
+        break
+      
+      indexes.append(i)
+      i = index
+      seq_idx = 0
+      while i < index + sequence_length: 
+        # NB! having index first is fastest in C-order matrices
+        self.prestates[len(indexes), seq_idx, ...] = self.getState(i - 1)
+        self.poststates[len(indexes), seq_idx, ...] = self.getState(i)
+        all_indexes.append(i)
+        i += 1
+        seq_idx += 1
+
+    actions = np.reshape(self.actions[all_indexes], (len(indexes), self.sequence_length))
+    rewards = np.reshape(self.rewards[all_indexes], (len(indexes), self.sequence_length))
+    terminals = np.reshape(self.terminals[all_indexes], (len(indexes), self.sequence_length))
+
+    if self.cnn_format == 'NHWC':
+      return np.transpose(self.prestates, (0, 1, 3, 4, 2)), actions, \
+        rewards, np.transpose(self.poststates, (0, 1, 3, 4, 2)), terminals
     else:
       return self.prestates, actions, rewards, self.poststates, terminals
 

@@ -19,9 +19,7 @@ class AgentConfig(object):
   ep_start = 1.
   ep_end_t = memory_size
 
-  sequence_length = 10
-  min_sequence_length = 6
-  history_length = 1 # For DRQN, this is just the number of channels, 1 for grayscale
+  history_length = 4 
   train_frequency = 4
   learn_start = 5. * scale
 
@@ -35,7 +33,7 @@ class AgentConfig(object):
   _save_step = _test_step * 10
 
 class EnvironmentConfig(object):
-  env_name = 'ppaquette/DoomDefendCenter-v0'
+  env_name = ''
 
   screen_width  = 160
   screen_height = 120
@@ -51,11 +49,16 @@ class M1(DQNConfig):
   env_type = 'detail'
   action_repeat = 4 # For Doom, use 4
 
+class DRQNConfig(AgentConfig, EnvironmentConfig):
+  history_length = 1
+  sequence_length = 10
+  min_sequence_length = 6
+
 def get_config(FLAGS):
-  if FLAGS.model == 'm1':
+  if FLAGS.model == 'dqn':
     config = M1
-  elif FLAGS.model == 'm2':
-    config = M2
+  elif FLAGS.model == 'drqn':
+    config = DRQNConfig
 
   for k, v in FLAGS.__dict__['__flags'].items():
     if k == 'gpu':
