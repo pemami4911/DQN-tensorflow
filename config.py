@@ -21,7 +21,7 @@ class AgentConfig(object):
 
   history_length = 4 
   train_frequency = 4
-  learn_start = 5. * scale
+  learn_start = 1000.0
 
   min_delta = -1
   max_delta = 1
@@ -34,9 +34,10 @@ class AgentConfig(object):
 
 class EnvironmentConfig(object):
   env_name = ''
+  env_type = ''
 
-  screen_width  = 160
-  screen_height = 120
+  screen_width  = 84
+  screen_height = 84
   max_reward = 1.
   min_reward = -1.
 
@@ -47,13 +48,14 @@ class DQNConfig(AgentConfig, EnvironmentConfig):
 class M1(DQNConfig):
   backend = 'tf'
   env_type = 'detail'
-  action_repeat = 4 # For Doom, use 4
+  action_repeat = 4
 
 class DRQNConfig(AgentConfig, EnvironmentConfig):
   history_length = 1
   sequence_length = 10
-  min_sequence_length = 6
-
+  init_sequence_length = 4
+  action_repeat = 4
+  
 def get_config(FLAGS):
   if FLAGS.model == 'dqn':
     config = M1

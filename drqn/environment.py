@@ -1,12 +1,9 @@
-#from skimage import transform as tf
+from skimage import transform as tf
 from skimage import color as cl
 import gym
-import gym_pull
 from gym.envs.classic_control import rendering
 import random
 import numpy as np
-from wrappers.observation_space import *
-from wrappers.action_space import *
 
 class Environment(object):
   def __init__(self, config):
@@ -47,8 +44,7 @@ class Environment(object):
   def screen(self):
     #return cv2.resize(cv2.cvtColor(self._screen, cv2.COLOR_RGB2GRAY)/255., self.dims)
     #return cv2.resize(cv2.cvtColor(self._screen, cv2.COLOR_BGR2YCR_CB)/255., self.dims)[:,:,0]
-    #return tf.resize(cl.rgb2gray(self._screen)/255., self.dims)
-    return cl.rgb2gray(self._screen)/255.   
+    return tf.resize(cl.rgb2gray(self._screen)/255., self.dims)
 
   @property
   def action_size(self):
@@ -72,9 +68,13 @@ class Environment(object):
 class GymDoomEnvironment(Environment):
   def __init__(self, config): 
     super(GymDoomEnvironment, self).__init__(config)
-  
+    import gym_pull
+    from wrappers.observation_space import SetResolution
+    from wrappers.action_space import ToDiscrete
+    
     # Convert MultiDiscrete action space to Discrete
     DiscreteWrapper = ToDiscrete('minimal')
+
     # Set resolution
     res = str(config.screen_width) + 'x' + str(config.screen_height)
     ResolutionWrapper = SetResolution(res)
@@ -90,6 +90,10 @@ class GymDoomEnvironment(Environment):
   @property
   def lives(self):
     pass   
+
+  @property 
+  def screen(self):
+    return cl.rgb2gray(self._screen)/255.   
 
   def act(self, action, is_training=True): 
     cumulated_reward = 0

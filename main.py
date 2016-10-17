@@ -1,7 +1,7 @@
 import random
 import tensorflow as tf
 
-from dqn.environment import GymEnvironment, GymDoomEnvironment, SimpleGymEnvironment
+from drqn.environment import GymEnvironment, SimpleGymEnvironment
 from dqn.agent import Agent as DQN
 from drqn.agent import Agent as DRQN
 from config import get_config
@@ -52,6 +52,11 @@ def main(_):
     if config.env_type == 'simple':
       env = SimpleGymEnvironment(config)
     elif config.env_type == 'Doom':
+      from drqn.environment import GymDoomEnvironment
+
+      config.screen_width = 160
+      config.screen_height = 120
+      
       env = GymDoomEnvironment(config)
     else:
       env = GymEnvironment(config)
@@ -59,7 +64,10 @@ def main(_):
     if not FLAGS.use_gpu:
       config.cnn_format = 'NHWC'
 
-    agent = Agent(config, env, sess)
+    if FLAGS.model == 'dqn':
+      agent = DQN(config, env, sess)
+    elif FLAGS.model == 'drqn':
+      agent = DRQN(config, env, sess)
 
     if FLAGS.is_train:
       agent.train()

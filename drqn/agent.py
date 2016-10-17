@@ -4,6 +4,7 @@ import random
 import numpy as np
 from tqdm import tqdm
 import tensorflow as tf
+from tensorflow.python.ops import rnn_cell
 
 from .base import BaseModel
 from .history import History
@@ -145,17 +146,18 @@ class Agent(BaseModel):
 
     t = time.time()
 
-    if self.double_q:
-      print 'Double Q-learning not supported for DRQN (yet)!'
+    actions = actions[:, self.init_sequence_length:]
+    rewards = rewards[:, self.init_sequence_length:]
+    terminal = terminal[:, self.init_sequence_length:]
 
     q_t_plus_1 = self.target_q_values.eval({self._target_s_t: s_t_plus_1})
 
     terminal = np.array(terminal) + 0.
     max_q_t_plus_1 = np.max(q_t_plus_1, axis=2)
-    target_q_t = (1. - terminal) * self.discount * np.transpose(max_q_t_plus_1) + rewards
+    target_q_t = (1. - terminal) * self.discount * max_q_t_plus_1 + rewards
 
     _, q_values, loss, summary_str = self.sess.run([self.optim, self.q_values, self.loss, self.q_seq_summary], {
-      self._target_q_values: np.transpose(target_q_t),
+      self._target_q_values: target_q_t,
       self._actions: actions,
       self._seq_t: s_t,
       self.learning_rate_step: self.step,
@@ -169,11 +171,21 @@ class Agent(BaseModel):
   def build_drqn(self):
     self.w = {}
     self.t_w = {}
-    self.truncated_seq_length = self.sequence_length - self.min_sequence_length
+    self.truncated_seq_length = self.sequence_length - self.init_sequence_length
 
     #initializer = tf.contrib.layers.xavier_initializer()
     initializer = tf.truncated_normal_initializer(0, 0.02)
     activation_fn = tf.nn.relu
+
+    with tf.variable_scope('shared_params'):
+      self.w['l1_w'], self.w['l1_b'] = conv2dParams(self.history_length, 32, [8, 8], initializer, name='l1')
+      self.w['l2_w'], self.w['l2_b'] = conv2dParams(32, 64, [4, 4], initializer, name='l2')
+      self.w['l3_w'], self.w['l3_b'] = conv2dParams(64, 64, [3, 3], initializer, name='l3')
+
+      # Define l4 params
+      self.w['q_w'], self.w['q_b'] = linearParams(512, self.env.action_size, name='q')
+      # Define lstm cell 
+      self.lstm_cell = rnn_cell.BasicLSTMCell(512, state_is_tuple=True)
 
     # training network
     with tf.variable_scope('sequence_prediction'):
@@ -184,15 +196,11 @@ class Agent(BaseModel):
         self._seq_t = tf.placeholder('float32',
             [None, self.sequence_length, self.history_length, self.screen_height, self.screen_width], name='seq_t')
 
-      self.w['l1_w'], self.w['l1_b'] = conv2dParams(self.history_length, 32, [8, 8], initializer, name='l1')
-      self.w['l2_w'], self.w['l2_b'] = conv2dParams(32, 64, [4, 4], initializer, name='l2')
-      self.w['l3_w'], self.w['l3_b'] = conv2dParams(64, 64, [3, 3], initializer, name='l3')
-
       # For training with a full sequence
       seq = []
 
       for i in range(self.sequence_length):
-        l1 = conv2dOut(_seq_t[:, i, :, :, :], self.w['l1_w'], self.w['l1_b'], [4, 4], self.cnn_format)
+        l1 = conv2dOut(self._seq_t[:, i, :, :, :], self.w['l1_w'], self.w['l1_b'], [4, 4], self.cnn_format)
         l2 = conv2dOut(l1, self.w['l2_w'], self.w['l2_b'], [2, 2], self.cnn_format)
         l3 = conv2dOut(l2, self.w['l3_w'], self.w['l3_b'], [1, 1], self.cnn_format)
 
@@ -209,16 +217,10 @@ class Agent(BaseModel):
       hist_sequence = tf.reshape(hist_sequence, [-1, hist_sequence.get_shape().as_list()[2]]) 
       # Split to get a list of 'sequence_length' tensors of shape (batch_size, l3_flattened)
       hist_sequence = tf.split(0, self.sequence_length, hist_sequence)
-      # Define lstm cell 
-      self.lstm_cell = rnn_cell.BasicLSTMCell(512, state_is_tuple=True)
       # list of length `sequence_length` of Tensors of size (?, 512)
-      l4, state = tf.nn.rnn(self.lstm_cell, hist_sequence, dtype=tf.float32)
-      
-      # throw out sequence elements less than min_sequence_length 
-      l4 = l4[self.truncated_seq_length:]
-
-      # Define l4 params
-      self.w['q_w'], self.w['q_b'] = linearParams(512, self.env.action_size, name='q')
+      l4, state = tf.nn.rnn(self.lstm_cell, hist_sequence, dtype=tf.float32)  
+      # throw out sequence elements less than init_sequence_length 
+      l4 = l4[self.init_sequence_length:]
 
       q_values = []
       q_actions = []
@@ -229,12 +231,12 @@ class Agent(BaseModel):
         q_values.append(q)
         q_actions.append(q_action)
 
-      self.q_values = tf.pack(q_values)
-      self.q_actions = tf.pack(q_actions)
+      self.q_values = tf.pack(q_values, axis=1)
+      self.q_actions = tf.pack(q_actions, axis=1)
 
       q_summary = []
-      avg_q = tf.reduce_mean(self.q_values, 1)
-      avg_q = tf.reduce_mean(self.avg_q, 0)
+      avg_q = tf.reduce_mean(self.q_values, 0)
+      avg_q = tf.reduce_mean(avg_q, 0)
       for idx in xrange(self.env.action_size):
         q_summary.append(tf.histogram_summary('q/%s' % idx, avg_q[idx]))
       self.q_seq_summary = tf.merge_summary(q_summary, 'q_seq_summary')
@@ -248,7 +250,7 @@ class Agent(BaseModel):
         self._s_t = tf.placeholder('float32',
             [None, self.history_length, self.screen_height, self.screen_width], name='s_t')
 
-      self.l1 = conv2dOut(_s_t, self.w['l1_w'], self.w['l1_b'], [4, 4], self.cnn_format)
+      self.l1 = conv2dOut(self._s_t, self.w['l1_w'], self.w['l1_b'], [4, 4], self.cnn_format)
       self.l2 = conv2dOut(l1, self.w['l2_w'], self.w['l2_b'], [2, 2], self.cnn_format)
       self.l3 = conv2dOut(l2, self.w['l3_w'], self.w['l3_b'], [1, 1], self.cnn_format)
 
@@ -303,13 +305,13 @@ class Agent(BaseModel):
       # list of length `sequence_length` of Tensors of size (?, 512)
       self.target_l4, target_state = tf.nn.rnn(self.target_lstm_cell, target_hist_sequence, dtype=tf.float32)
       
-      # throw out sequence elements less than min_sequence_length 
-      self.target_l4 = self.target_l4[self.truncated_seq_length:]
+      # throw out sequence elements less than init_sequence_length 
+      self.target_l4 = self.target_l4[self.init_sequence_length:]
 
       target_q_values = []
       target_q_actions = []
 
-      self.t_w['q_w'], self.t_w['q_b'] = linear(self.target_l4, self.env.action_size, name='q')
+      self.t_w['q_w'], self.t_w['q_b'] = linearParams(512, self.env.action_size, name='t_q')
 
       for i in range(self.truncated_seq_length):
         target_q = affine(self.target_l4[i], self.t_w['q_w'], self.t_w['q_b'])
@@ -317,8 +319,8 @@ class Agent(BaseModel):
         target_q_values.append(target_q)
         target_q_actions.append(target_q_action)
 
-      self.target_q_values = tf.pack(target_q_values)
-      self.target_q_actions = tf.pack(target_q_actions)
+      self.target_q_values = tf.pack(target_q_values, axis=1)
+      self.target_q_actions = tf.pack(target_q_actions, axis=1)
 
     with tf.variable_scope('pred_to_target'):
       self.t_w_input = {}
@@ -330,7 +332,7 @@ class Agent(BaseModel):
 
     # optimizer
     with tf.variable_scope('optimizer'):
-      self._target_q_values = tf.placeholder('float32', [self.truncated_seq_length, None], name='target_q_values')
+      self._target_q_values = tf.placeholder('float32', [None, self.truncated_seq_length], name='target_q_values')
       self._actions = tf.placeholder('int64', [None, self.truncated_seq_length], name='actions')
 
       actions_one_hot = tf.one_hot(self._actions, self.env.action_size, 1.0, 0.0, name='actions_one_hot')

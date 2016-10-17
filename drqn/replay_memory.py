@@ -96,24 +96,24 @@ class ReplayMemory:
       # find random index 
       while True:
         # sample one index (ignore states wrapping over) 
-        index = random.randint(self.history_length * sequence_length, self.count - 1)
+        index = random.randint(self.history_length * self.sequence_length, self.count - 1)
         # if wraps over current pointer, then get new one
-        if index >= self.current and index - self.history_length * sequence_length < self.current:
+        if index >= self.current and index - self.history_length * self.sequence_length < self.current:
           continue
         # if wraps over episode end, then get new one
         # NB! poststate (last screen) can be terminal state!
-        if self.terminals[(index - self.history_length * sequence_length):index].any():
+        if self.terminals[(index - self.history_length * self.sequence_length):index].any():
           continue
         # otherwise use this index
         break
       
-      indexes.append(i)
       i = index
+      indexes.append(i)
       seq_idx = 0
-      while i < index + sequence_length: 
+      while i < index + self.sequence_length: 
         # NB! having index first is fastest in C-order matrices
-        self.prestates[len(indexes), seq_idx, ...] = self.getState(i - 1)
-        self.poststates[len(indexes), seq_idx, ...] = self.getState(i)
+        self.prestates[len(indexes) - 1, seq_idx, ...] = self.getState(i - 1)
+        self.poststates[len(indexes) - 1, seq_idx, ...] = self.getState(i)
         all_indexes.append(i)
         i += 1
         seq_idx += 1
