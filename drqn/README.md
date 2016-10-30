@@ -6,11 +6,11 @@ You can test both DQN and DRQN on OpenAI gym's Atari environments, as well as Op
 
 To run an experiment with DRQN on Atari Breakout-v0 without GPU and with display: 
 
-    `python main.py --model=drqn --env_name=Breakout-v0 --env_type=simple --use_gpu=False --display=True`
+    python main.py --model=drqn --env_name=Breakout-v0 --env_type=simple --use_gpu=False --display=True
 
 To run an experiment with DRQN on the Doom env DefendCenter-v0 with GPU and no display: 
     
-    `python main.py --model=drqn --env_name=ppaquette/DoomDefendCenter-v0 --env_type=Doom --use_gpu=True --gpu_fraction=2/3`
+    python main.py --model=drqn --env_name=ppaquette/DoomDefendCenter-v0 --env_type=Doom --use_gpu=True --gpu_fraction=2/3
 
 You can run experiments with DQN by changing the model to `dqn`. 
 
@@ -18,8 +18,8 @@ You can view the Tensorflow computation graph with Tensorboard for DQN and DRQN,
 
 ## Requirements
 
-This branch doesn't use OpenCV2 (installing it if you don't have it just for resizing an image and converting it to grayscale is overkill), I use skimage instead.
-`gym-pull` is only needed if you're going to use the Doom environments. 
+This branch doesn't use OpenCV2 (installing it if you don't have it just for resizing an image and converting it to grayscale is overkill), and instead I use skimage.
+`gym-pull` is only needed if you're going to use the Doom environments - I had some trouble installing this on OSX, but it seems to work fine on Ubuntu 14.04.  
 
 - Python 2.7 or Python 3.3+
 - [gym](https://github.com/openai/gym)
