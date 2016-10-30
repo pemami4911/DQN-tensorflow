@@ -17,7 +17,7 @@ class ReplayMemory:
     self.rewards = np.empty(self.memory_size, dtype = np.integer)
     self.screens = np.empty((self.memory_size, config.screen_height, config.screen_width), dtype = np.float16)
     self.terminals = np.empty(self.memory_size, dtype = np.bool)
-    self.history_length = config.history_length
+    self.history_length = 1 # DRQN uses 1 channel (grayscale)
     self.dims = (config.screen_height, config.screen_width)
     self.sequence_length = config.sequence_length
     self.batch_size = config.batch_size

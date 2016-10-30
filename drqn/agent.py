@@ -40,7 +40,7 @@ class Agent(BaseModel):
 
     screen, reward, action, terminal = self.env.new_random_game()
 
-    for _ in range(self.history_length):
+    for _ in range(self.sequence_length):
       self.history.add(screen)
 
     for self.step in tqdm(range(start_step, self.max_step), ncols=70, initial=start_step):
@@ -62,6 +62,11 @@ class Agent(BaseModel):
         num_game += 1
         ep_rewards.append(ep_reward)
         ep_reward = 0.
+      
+        self.history.reset()
+        for _ in range(self.sequence_length):
+          self.history.add(screen)
+      
       else:
         ep_reward += reward
 
@@ -121,7 +126,7 @@ class Agent(BaseModel):
     if random.random() < ep:
       action = random.randrange(self.env.action_size)
     else:
-      action = self.q_action.eval({self._s_t: [s_t]})[0]
+      action = self.q_actions.eval({self._s_t: [s_t]})[0][-1]
 
     return action
 
@@ -139,7 +144,7 @@ class Agent(BaseModel):
         self.update_target_q_network()
 
   def q_learning_mini_batch(self):
-    if self.memory.count < self.history_length * self.sequence_length:
+    if self.memory.count < self.sequence_length:
       return
     else:
       s_t, actions, rewards, s_t_plus_1, terminal = self.memory.sample_sequence()
@@ -159,7 +164,7 @@ class Agent(BaseModel):
     _, q_values, loss, summary_str = self.sess.run([self.optim, self.q_values, self.loss, self.q_seq_summary], {
       self._target_q_values: target_q_t,
       self._actions: actions,
-      self._seq_t: s_t,
+      self._s_t: s_t,
       self.learning_rate_step: self.step,
     })
 
@@ -177,30 +182,30 @@ class Agent(BaseModel):
     initializer = tf.truncated_normal_initializer(0, 0.02)
     activation_fn = tf.nn.relu
 
+    # Define network params
     with tf.variable_scope('shared_params'):
-      self.w['l1_w'], self.w['l1_b'] = conv2dParams(self.history_length, 32, [8, 8], initializer, name='l1')
+      self.w['l1_w'], self.w['l1_b'] = conv2dParams(1, 32, [8, 8], initializer, name='l1')
       self.w['l2_w'], self.w['l2_b'] = conv2dParams(32, 64, [4, 4], initializer, name='l2')
       self.w['l3_w'], self.w['l3_b'] = conv2dParams(64, 64, [3, 3], initializer, name='l3')
-
       # Define l4 params
       self.w['q_w'], self.w['q_b'] = linearParams(512, self.env.action_size, name='q')
       # Define lstm cell 
       self.lstm_cell = rnn_cell.BasicLSTMCell(512, state_is_tuple=True)
 
-    # training network
-    with tf.variable_scope('sequence_prediction'):
+    # Define training network layers
+    with tf.variable_scope('prediction'):
       if self.cnn_format == 'NHWC':
-        self._seq_t = tf.placeholder('float32',
-            [None, self.sequence_length, self.screen_height, self.screen_width, self.history_length], name='seq_t')
+        self._s_t = tf.placeholder('float32',
+            [None, self.sequence_length, self.screen_height, self.screen_width, 1], name='s_t')
       else:
-        self._seq_t = tf.placeholder('float32',
-            [None, self.sequence_length, self.history_length, self.screen_height, self.screen_width], name='seq_t')
+        self._s_t = tf.placeholder('float32',
+            [None, self.sequence_length, 1, self.screen_height, self.screen_width], name='s_t')
 
       # For training with a full sequence
       seq = []
 
       for i in range(self.sequence_length):
-        l1 = conv2dOut(self._seq_t[:, i, :, :, :], self.w['l1_w'], self.w['l1_b'], [4, 4], self.cnn_format)
+        l1 = conv2dOut(self._s_t[:, i, :, :, :], self.w['l1_w'], self.w['l1_b'], [4, 4], self.cnn_format)
         l2 = conv2dOut(l1, self.w['l2_w'], self.w['l2_b'], [2, 2], self.cnn_format)
         l3 = conv2dOut(l2, self.w['l3_w'], self.w['l3_b'], [1, 1], self.cnn_format)
 
@@ -231,55 +236,26 @@ class Agent(BaseModel):
         q_values.append(q)
         q_actions.append(q_action)
 
-      self.q_values = tf.pack(q_values, axis=1)
-      self.q_actions = tf.pack(q_actions, axis=1)
+      self.q_values = tf.pack(q_values, axis=1, name='q_values')
+      self.q_actions = tf.pack(q_actions, axis=1, name='q_actions')
 
       q_summary = []
       avg_q = tf.reduce_mean(self.q_values, 0)
       avg_q = tf.reduce_mean(avg_q, 0)
       for idx in xrange(self.env.action_size):
         q_summary.append(tf.histogram_summary('q/%s' % idx, avg_q[idx]))
-      self.q_seq_summary = tf.merge_summary(q_summary, 'q_seq_summary')
-
-    # Shared parameters with sequence_prediction network, but accepts single image as input
-    with tf.variable_scope('prediction'):
-      if self.cnn_format == 'NHWC':
-        self._s_t = tf.placeholder('float32',
-            [None, self.screen_height, self.screen_width, self.history_length], name='s_t')
-      else:
-        self._s_t = tf.placeholder('float32',
-            [None, self.history_length, self.screen_height, self.screen_width], name='s_t')
-
-      self.l1 = conv2dOut(self._s_t, self.w['l1_w'], self.w['l1_b'], [4, 4], self.cnn_format)
-      self.l2 = conv2dOut(l1, self.w['l2_w'], self.w['l2_b'], [2, 2], self.cnn_format)
-      self.l3 = conv2dOut(l2, self.w['l3_w'], self.w['l3_b'], [1, 1], self.cnn_format)
-
-      shape = self.l3.get_shape().as_list()
-      self.l3_flat = tf.reshape(l3, [-1, reduce(lambda x, y: x * y, shape[1:])])
-
-      # l3_flat shape: (batch_size, l3_flattened) 
-      # list of length 1 of Tensors of size (?, 512)
-      self.l4, state = tf.nn.rnn(self.lstm_cell, [self.l3_flat], dtype=tf.float32)
-
-      self.q = affine(tf.squeeze(self.l4), self.w['q_w'], self.w['q_b'])
-      self.q_action = tf.argmax(self.q, dimension=1)
-
-      q_summary = []
-      avg_q = tf.reduce_mean(self.q, 0)
-      for idx in xrange(self.env.action_size):
-        q_summary.append(tf.histogram_summary('q/%s' % idx, avg_q[idx]))
-      self.q_summary = tf.merge_summary(q_summary, 'q_summary')
+      self.q_seq_summary = tf.merge_summary(q_summary, 'q_summary')
 
     # target network
     with tf.variable_scope('target'):
       if self.cnn_format == 'NHWC':
         self._target_s_t = tf.placeholder('float32',
-            [None, self.sequence_length, self.screen_height, self.screen_width, self.history_length], name='target_s_t')
+            [None, self.sequence_length, self.screen_height, self.screen_width, 1], name='target_s_t')
       else:
         self._target_s_t = tf.placeholder('float32',
-            [None, self.sequence_length, self.history_length, self.screen_height, self.screen_width], name='target_s_t')
+            [None, self.sequence_length, 1, self.screen_height, self.screen_width], name='target_s_t')
 
-      self.t_w['l1_w'], self.t_w['l1_b'] = conv2dParams(self.history_length, 32, [8, 8], initializer, name='target_l1')
+      self.t_w['l1_w'], self.t_w['l1_b'] = conv2dParams(1, 32, [8, 8], initializer, name='target_l1')
       self.t_w['l2_w'], self.t_w['l2_b'] = conv2dParams(32, 64, [4, 4], initializer, name='target_l2')
       self.t_w['l3_w'], self.t_w['l3_b'] = conv2dParams(64, 64, [3, 3], initializer, name='target_l3')
 
@@ -428,7 +404,7 @@ class Agent(BaseModel):
       screen, reward, action, terminal = self.env.new_random_game()
       current_reward = 0
 
-      for _ in range(self.history_length):
+      for _ in range(self.sequence_length):
         test_history.add(screen)
 
       for t in tqdm(range(n_step), ncols=70):
